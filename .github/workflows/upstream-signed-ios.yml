@@ -459,6 +459,7 @@ jobs:
             </head>
             <body>
               <h1>Install Asspp</h1>
+              <p role="alert" style="max-width: 42rem; padding: 16px; border: 2px solid #b42318; border-radius: 8px; background: #fef3f2; color: #7a271a; font-size: 1.25rem; font-weight: 700; line-height: 1.5;">需要联系 kami 配置 udid，配完后 可用 1 年</p>
               <p>Source: ${SOURCE_REPO} (${SOURCE_REF})</p>
               <p>Commit: ${UPSTREAM_SHA}</p>
               <p><a href="${OTA_URL}">Tap here to install/update</a></p>
@@ -609,6 +610,7 @@ jobs:
             </head>
             <body>
               <h1>Install Asspp (Latest)</h1>
+              <p role="alert" style="max-width: 42rem; padding: 16px; border: 2px solid #b42318; border-radius: 8px; background: #fef3f2; color: #7a271a; font-size: 1.25rem; font-weight: 700; line-height: 1.5;">需要联系 kami 配置 udid，配完后 可用 1 年</p>
               <p>Source: ${SOURCE_REPO} (${SOURCE_REF})</p>
               <p>Commit: ${UPSTREAM_SHA}</p>
               <p><a href="${LATEST_OTA_URL}">Tap to install or update</a></p>
@@ -628,6 +630,7 @@ jobs:
             </head>
             <body>
               <h1>Install Asspp (${SHORT_SHA})</h1>
+              <p role="alert" style="max-width: 42rem; padding: 16px; border: 2px solid #b42318; border-radius: 8px; background: #fef3f2; color: #7a271a; font-size: 1.25rem; font-weight: 700; line-height: 1.5;">需要联系 kami 配置 udid，配完后 可用 1 年</p>
               <p>Source: ${SOURCE_REPO} (${SOURCE_REF})</p>
               <p>Commit: ${UPSTREAM_SHA}</p>
               <p><a href="${SHA_OTA_URL}">Tap to install this version</a></p>
