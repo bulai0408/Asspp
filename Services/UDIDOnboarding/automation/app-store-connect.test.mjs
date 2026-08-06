@@ -115,6 +115,31 @@ test("registers a missing iOS device", async () => {
   });
 });
 
+test("normalizes an X.509 serial number for Apple's certificate filter", async () => {
+  let requestUrl;
+  const fetcher = async (input) => {
+    requestUrl = new URL(input);
+    return jsonResponse({
+      data: [{
+        type: "certificates",
+        id: "certificate-id",
+        attributes: {
+          activated: true,
+          certificateType: "DISTRIBUTION",
+          expirationDate: "2099-01-01T00:00:00.000+00:00",
+          serialNumber: "AB12",
+        },
+      }],
+    });
+  };
+  const client = new AppStoreConnectClient({ token: "token", fetcher });
+
+  const certificate = await client.findDistributionCertificate("00ab12");
+
+  assert.equal(certificate.id, "certificate-id");
+  assert.equal(requestUrl.searchParams.get("filter[serialNumber]"), "AB12");
+});
+
 test("creates an Ad Hoc profile with bundle, certificate, and every device", async () => {
   let request;
   const fetcher = async (input, init) => {

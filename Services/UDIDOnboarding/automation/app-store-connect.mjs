@@ -139,12 +139,15 @@ export class AppStoreConnectClient {
   }
 
   async findDistributionCertificate(serialNumber) {
+    const normalizedSerial = typeof serialNumber === "string"
+      ? serialNumber.replace(/^0+(?=[0-9A-Fa-f])/, "").toUpperCase()
+      : "";
     const query = {
       "fields[certificates]": "name,certificateType,displayName,serialNumber,platform,expirationDate,activated",
       limit: "200",
     };
-    if (serialNumber) {
-      query["filter[serialNumber]"] = serialNumber;
+    if (normalizedSerial) {
+      query["filter[serialNumber]"] = normalizedSerial;
     } else {
       query["filter[certificateType]"] = "DISTRIBUTION,IOS_DISTRIBUTION";
     }
