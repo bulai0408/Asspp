@@ -32,6 +32,10 @@ on:
         description: "Legacy override git ref (e.g. refs/heads/main)"
         required: false
         type: string
+      onboarding_request_id:
+        description: "Opaque self-service device onboarding request"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -183,6 +187,7 @@ jobs:
       SOURCE_REF: ${{ needs.detect-upstream.outputs.source_ref }}
       SHORT_SHA: ${{ needs.detect-upstream.outputs.short_sha }}
       TAG_NAME: ${{ needs.detect-upstream.outputs.tag_name }}
+      ONBOARDING_REQUEST_ID: ${{ github.event.inputs.onboarding_request_id }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -191,6 +196,15 @@ jobs:
           ref: ${{ env.UPSTREAM_SHA }}
           path: source
           fetch-depth: 1
+
+      - name: Checkout onboarding automation
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: automation-repo
+          fetch-depth: 1
+          sparse-checkout: Services/UDIDOnboarding/automation
 
       - name: Select Xcode
         run: |
@@ -208,6 +222,55 @@ jobs:
           done
           xcodebuild -version
 
+      - name: Claim and verify device callback
+        id: onboarding
+        if: env.ONBOARDING_REQUEST_ID != ''
+        env:
+          UDID_WORKER_URL: ${{ secrets.UDID_WORKER_URL }}
+          UDID_WORKER_API_TOKEN: ${{ secrets.UDID_WORKER_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${ONBOARDING_REQUEST_ID}" =~ ^[A-Za-z0-9_-]{22}$ ]]; then
+            echo "Invalid onboarding request identifier."
+            exit 1
+          fi
+          if [ -z "${UDID_WORKER_URL}" ] || [ -z "${UDID_WORKER_API_TOKEN}" ]; then
+            echo "Missing Worker onboarding secrets."
+            exit 1
+          fi
+
+          WORKER_BASE_URL="${UDID_WORKER_URL%/}"
+          CLAIM_PATH="${RUNNER_TEMP}/onboarding-claim.json"
+          HTTP_CODE=$(curl -sS -o "${CLAIM_PATH}" -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${UDID_WORKER_API_TOKEN}" \
+            "${WORKER_BASE_URL}/internal/requests/${ONBOARDING_REQUEST_ID}/claim")
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "Unable to claim the onboarding request (HTTP ${HTTP_CODE})."
+            exit 1
+          fi
+
+          CMS_BASE64=$(/usr/bin/plutil -extract cms_base64 raw -o - "${CLAIM_PATH}")
+          EXPECTED_CHALLENGE_HASH=$(/usr/bin/plutil -extract challenge_hash raw -o - "${CLAIM_PATH}")
+          CMS_PATH="${RUNNER_TEMP}/device-callback.der"
+          ATTRIBUTES_PATH="${RUNNER_TEMP}/device-attributes.json"
+          if printf 'dGVzdA==' | base64 --decode >/dev/null 2>&1; then
+            printf '%s' "${CMS_BASE64}" | base64 --decode > "${CMS_PATH}"
+          else
+            printf '%s' "${CMS_BASE64}" | base64 -D > "${CMS_PATH}"
+          fi
+          unset CMS_BASE64
+
+          bash automation-repo/Services/UDIDOnboarding/automation/verify-cms.sh \
+            "${CMS_PATH}" \
+            "${ATTRIBUTES_PATH}"
+
+          {
+            echo "attributes_path=${ATTRIBUTES_PATH}"
+            echo "challenge_hash=${EXPECTED_CHALLENGE_HASH}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Install signing assets
         id: signing
         env:
@@ -219,11 +282,16 @@ jobs:
           BUNDLE_ID_OVERRIDE: ${{ vars.IOS_BUNDLE_ID }}
           SIGNING_IDENTITY_OVERRIDE: ${{ vars.IOS_SIGNING_IDENTITY }}
           EXPORT_METHOD_OVERRIDE: ${{ vars.IOS_EXPORT_METHOD }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_BASE64 }}
+          DEVICE_ATTRIBUTES_PATH: ${{ steps.onboarding.outputs.attributes_path }}
+          EXPECTED_CHALLENGE_HASH: ${{ steps.onboarding.outputs.challenge_hash }}
         run: |
           set -euo pipefail
 
-          if [ -z "${CERT_P12_BASE64}" ] || [ -z "${CERT_PASSWORD}" ] || [ -z "${PROFILE_BASE64}" ]; then
-            echo "Missing required secrets: IOS_CERT_P12_BASE64, IOS_CERT_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64"
+          if [ -z "${CERT_P12_BASE64}" ] || [ -z "${CERT_PASSWORD}" ]; then
+            echo "Missing required secrets: IOS_CERT_P12_BASE64, IOS_CERT_PASSWORD"
             exit 1
           fi
 
@@ -235,10 +303,8 @@ jobs:
 
           if printf 'dGVzdA==' | base64 --decode >/dev/null 2>&1; then
             printf '%s' "${CERT_P12_BASE64}" | base64 --decode > "${CERT_PATH}"
-            printf '%s' "${PROFILE_BASE64}" | base64 --decode > "${PROFILE_PATH}"
           else
             printf '%s' "${CERT_P12_BASE64}" | base64 -D > "${CERT_PATH}"
-            printf '%s' "${PROFILE_BASE64}" | base64 -D > "${PROFILE_PATH}"
           fi
 
           security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
@@ -248,8 +314,65 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
 
           EXISTING_KEYCHAINS=$(security list-keychains -d user | tr -d '"')
+          # shellcheck disable=SC2086
           security list-keychains -d user -s "${KEYCHAIN_PATH}" ${EXISTING_KEYCHAINS}
           security default-keychain -d user -s "${KEYCHAIN_PATH}"
+
+          DEFAULT_BUNDLE_ID=$(awk -F '=' '/^PRODUCT_BUNDLE_IDENTIFIER/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' source/Configuration/Base.xcconfig)
+          BUNDLE_ID="${BUNDLE_ID_OVERRIDE:-${DEFAULT_BUNDLE_ID}}"
+
+          IDENTITY_SHA=$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk 'NR == 1 { print $2 }')
+          CERTIFICATE_PEM="${RUNNER_TEMP}/signing-certificate.pem"
+          if [ -z "${IDENTITY_SHA}" ] || ! security find-certificate -Z "${IDENTITY_SHA}" -p "${KEYCHAIN_PATH}" > "${CERTIFICATE_PEM}"; then
+            echo "Unable to locate the imported signing certificate."
+            exit 1
+          fi
+          CERTIFICATE_SERIAL=$(openssl x509 -in "${CERTIFICATE_PEM}" -noout -serial | sed 's/^serial=//')
+          if [ -z "${CERTIFICATE_SERIAL}" ]; then
+            echo "Unable to read the imported signing certificate serial number."
+            exit 1
+          fi
+          echo "::add-mask::${CERTIFICATE_SERIAL}"
+
+          API_CREDENTIAL_COUNT=0
+          for API_VALUE in \
+            "${APP_STORE_CONNECT_ISSUER_ID}" \
+            "${APP_STORE_CONNECT_KEY_ID}" \
+            "${APP_STORE_CONNECT_PRIVATE_KEY_BASE64}"
+          do
+            if [ -n "${API_VALUE}" ]; then
+              API_CREDENTIAL_COUNT=$((API_CREDENTIAL_COUNT + 1))
+            fi
+          done
+
+          if [ "${API_CREDENTIAL_COUNT}" -eq 3 ]; then
+            APP_STORE_CONNECT_ISSUER_ID="${APP_STORE_CONNECT_ISSUER_ID}" \
+            APP_STORE_CONNECT_KEY_ID="${APP_STORE_CONNECT_KEY_ID}" \
+            APP_STORE_CONNECT_PRIVATE_KEY_BASE64="${APP_STORE_CONNECT_PRIVATE_KEY_BASE64}" \
+            IOS_BUNDLE_ID="${BUNDLE_ID}" \
+            IOS_CERTIFICATE_SERIAL_NUMBER="${CERTIFICATE_SERIAL}" \
+            PROFILE_OUTPUT_PATH="${PROFILE_PATH}" \
+            ONBOARDING_REQUEST_ID="${ONBOARDING_REQUEST_ID}" \
+            DEVICE_ATTRIBUTES_PATH="${DEVICE_ATTRIBUTES_PATH}" \
+            EXPECTED_CHALLENGE_HASH="${EXPECTED_CHALLENGE_HASH}" \
+            node automation-repo/Services/UDIDOnboarding/automation/process-device.mjs
+          elif [ "${API_CREDENTIAL_COUNT}" -ne 0 ]; then
+            echo "App Store Connect API credentials are incomplete."
+            exit 1
+          elif [ -n "${ONBOARDING_REQUEST_ID}" ]; then
+            echo "App Store Connect API credentials are required for onboarding."
+            exit 1
+          else
+            if [ -z "${PROFILE_BASE64}" ]; then
+              echo "Missing fallback secret: IOS_PROVISIONING_PROFILE_BASE64"
+              exit 1
+            fi
+            if printf 'dGVzdA==' | base64 --decode >/dev/null 2>&1; then
+              printf '%s' "${PROFILE_BASE64}" | base64 --decode > "${PROFILE_PATH}"
+            else
+              printf '%s' "${PROFILE_BASE64}" | base64 -D > "${PROFILE_PATH}"
+            fi
+          fi
 
           security cms -D -i "${PROFILE_PATH}" > "${PROFILE_PLIST}"
           PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" "${PROFILE_PLIST}")
@@ -260,8 +383,6 @@ jobs:
           mkdir -p "${HOME}/Library/MobileDevice/Provisioning Profiles"
           cp "${PROFILE_PATH}" "${HOME}/Library/MobileDevice/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
 
-          DEFAULT_BUNDLE_ID=$(awk -F '=' '/^PRODUCT_BUNDLE_IDENTIFIER/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' source/Configuration/Base.xcconfig)
-          BUNDLE_ID="${BUNDLE_ID_OVERRIDE:-${DEFAULT_BUNDLE_ID}}"
           TEAM_ID="${TEAM_ID_OVERRIDE:-${PROFILE_TEAM_ID}}"
           EXPORT_METHOD="${EXPORT_METHOD_OVERRIDE:-ad-hoc}"
 
@@ -317,6 +438,22 @@ jobs:
             echo "export_method=${EXPORT_METHOD}"
             echo "build_number=${GITHUB_RUN_NUMBER}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Record onboarding build run
+        if: env.ONBOARDING_REQUEST_ID != ''
+        env:
+          UDID_WORKER_URL: ${{ secrets.UDID_WORKER_URL }}
+          UDID_WORKER_API_TOKEN: ${{ secrets.UDID_WORKER_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          STATUS_BODY=$(printf '{"state":"building","github_run_id":"%s"}' "${GITHUB_RUN_ID}")
+          curl -sS --fail-with-body \
+            -X POST \
+            -H "Authorization: Bearer ${UDID_WORKER_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "${STATUS_BODY}" \
+            "${UDID_WORKER_URL%/}/internal/requests/${ONBOARDING_REQUEST_ID}/status" \
+            >/dev/null
 
       - name: Archive iOS app
         working-directory: source
@@ -400,6 +537,7 @@ jobs:
           SOURCE_REPO: ${{ env.SOURCE_REPO }}
           SOURCE_REF: ${{ env.SOURCE_REF }}
           UPSTREAM_SHA: ${{ env.UPSTREAM_SHA }}
+          UDID_ONBOARDING_URL: ${{ secrets.UDID_WORKER_URL }}
         run: |
           set -euo pipefail
 
@@ -460,6 +598,7 @@ jobs:
             <body>
               <h1>Install Asspp</h1>
               <p role="alert" style="max-width: 42rem; padding: 16px; border: 2px solid #b42318; border-radius: 8px; background: #fef3f2; color: #7a271a; font-size: 1.25rem; font-weight: 700; line-height: 1.5;">需要联系 kami 配置 udid，配完后 可用 1 年</p>
+              <p><a href="${UDID_ONBOARDING_URL}">自助配置本机 UDID</a></p>
               <p>Source: ${SOURCE_REPO} (${SOURCE_REF})</p>
               <p>Commit: ${UPSTREAM_SHA}</p>
               <p><a href="${OTA_URL}">Tap here to install/update</a></p>
@@ -539,6 +678,7 @@ jobs:
           IPA_NAME: ${{ steps.assets.outputs.ipa_name }}
           RELEASE_URL: ${{ steps.publish.outputs.release_url }}
           PAGES_BASE_URL_OVERRIDE: ${{ vars.IOS_OTA_BASE_URL }}
+          UDID_ONBOARDING_URL: ${{ secrets.UDID_WORKER_URL }}
         run: |
           set -euo pipefail
 
@@ -611,6 +751,7 @@ jobs:
             <body>
               <h1>Install Asspp (Latest)</h1>
               <p role="alert" style="max-width: 42rem; padding: 16px; border: 2px solid #b42318; border-radius: 8px; background: #fef3f2; color: #7a271a; font-size: 1.25rem; font-weight: 700; line-height: 1.5;">需要联系 kami 配置 udid，配完后 可用 1 年</p>
+              <p><a href="${UDID_ONBOARDING_URL}">自助配置本机 UDID</a></p>
               <p>Source: ${SOURCE_REPO} (${SOURCE_REF})</p>
               <p>Commit: ${UPSTREAM_SHA}</p>
               <p><a href="${LATEST_OTA_URL}">Tap to install or update</a></p>
@@ -631,6 +772,7 @@ jobs:
             <body>
               <h1>Install Asspp (${SHORT_SHA})</h1>
               <p role="alert" style="max-width: 42rem; padding: 16px; border: 2px solid #b42318; border-radius: 8px; background: #fef3f2; color: #7a271a; font-size: 1.25rem; font-weight: 700; line-height: 1.5;">需要联系 kami 配置 udid，配完后 可用 1 年</p>
+              <p><a href="${UDID_ONBOARDING_URL}">自助配置本机 UDID</a></p>
               <p>Source: ${SOURCE_REPO} (${SOURCE_REF})</p>
               <p>Commit: ${UPSTREAM_SHA}</p>
               <p><a href="${SHA_OTA_URL}">Tap to install this version</a></p>
@@ -708,3 +850,38 @@ jobs:
             echo "- Latest install page: ${INSTALL_URL}"
             echo "- Latest manifest: ${MANIFEST_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  report-onboarding:
+    needs:
+      - detect-upstream
+      - build-release
+      - deploy-pages
+    if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.onboarding_request_id != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report terminal onboarding status
+        env:
+          ONBOARDING_REQUEST_ID: ${{ github.event.inputs.onboarding_request_id }}
+          BUILD_RESULT: ${{ needs.build-release.result }}
+          PAGES_RESULT: ${{ needs.deploy-pages.result }}
+          UDID_WORKER_URL: ${{ secrets.UDID_WORKER_URL }}
+          UDID_WORKER_API_TOKEN: ${{ secrets.UDID_WORKER_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ "${BUILD_RESULT}" = "success" ] && [ "${PAGES_RESULT}" = "success" ]; then
+            STATUS_BODY='{"state":"ready"}'
+          else
+            STATUS_BODY='{"state":"failed","error_code":"BUILD_FAILED"}'
+          fi
+
+          HTTP_CODE=$(curl -sS -o /tmp/onboarding-status-response -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${UDID_WORKER_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "${STATUS_BODY}" \
+            "${UDID_WORKER_URL%/}/internal/requests/${ONBOARDING_REQUEST_ID}/status")
+          if [ "${HTTP_CODE}" != "204" ]; then
+            echo "Unable to report onboarding status (HTTP ${HTTP_CODE})."
+            exit 1
+          fi

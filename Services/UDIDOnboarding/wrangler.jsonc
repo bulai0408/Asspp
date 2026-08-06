@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "asspp-udid-onboarding",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "GITHUB_REPOSITORY": "bulai0408/Asspp",
+    "GITHUB_WORKFLOW": "upstream-signed-ios.yml",
+    "GITHUB_REF": "main",
+    "OTA_INSTALL_URL": "itms-services://?action=download-manifest&url=https://bulai0408.github.io/Asspp/ios/latest/manifest.plist"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "asspp-udid-onboarding",
+      "database_id": "99d3d55d-00f1-443b-b860-5acfe8bf127f",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "ANSWER_RATE_LIMITER",
+      "namespace_id": "19041",
+      "simple": {
+        "limit": 8,
+        "period": 60
+      }
+    }
+  ]
+}

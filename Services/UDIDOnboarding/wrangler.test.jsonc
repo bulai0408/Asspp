@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "asspp-udid-onboarding-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "GATE_ANSWER": "test-answer",
+    "CHALLENGE_KEY": "test-challenge-key",
+    "GITHUB_TOKEN": "test-github-token",
+    "INTERNAL_API_TOKEN": "test-internal-token",
+    "GITHUB_REPOSITORY": "bulai0408/Asspp",
+    "GITHUB_WORKFLOW": "upstream-signed-ios.yml",
+    "GITHUB_REF": "main",
+    "OTA_INSTALL_URL": "itms-services://?action=download-manifest&url=https://example.com/ios/latest/manifest.plist"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "asspp-udid-onboarding-test",
+      "database_id": "11111111-1111-1111-1111-111111111111",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "ANSWER_RATE_LIMITER",
+      "namespace_id": "19042",
+      "simple": {
+        "limit": 1000,
+        "period": 60
+      }
+    }
+  ]
+}
