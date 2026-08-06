@@ -115,6 +115,23 @@ test("registers a missing iOS device", async () => {
   });
 });
 
+test("keeps only iPhone-family devices for an iOS Ad Hoc profile", async () => {
+  const fetcher = async () => jsonResponse({
+    data: [
+      { type: "devices", id: "iphone", attributes: { deviceClass: "IPHONE" } },
+      { type: "devices", id: "ipad", attributes: { deviceClass: "IPAD" } },
+      { type: "devices", id: "ipod", attributes: { deviceClass: "IPOD" } },
+      { type: "devices", id: "watch", attributes: { deviceClass: "APPLE_WATCH" } },
+      { type: "devices", id: "tv", attributes: { deviceClass: "APPLE_TV" } },
+    ],
+  });
+  const client = new AppStoreConnectClient({ token: "token", fetcher });
+
+  const devices = await client.listEnabledIosDevices();
+
+  assert.deepEqual(devices.map((device) => device.id), ["iphone", "ipad", "ipod"]);
+});
+
 test("normalizes an X.509 serial number for Apple's certificate filter", async () => {
   let requestUrl;
   const fetcher = async (input) => {

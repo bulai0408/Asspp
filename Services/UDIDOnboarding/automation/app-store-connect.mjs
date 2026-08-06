@@ -116,12 +116,13 @@ export class AppStoreConnectClient {
   }
 
   async listEnabledIosDevices() {
-    return this.listAll("/v1/devices", {
+    const devices = await this.listAll("/v1/devices", {
       "filter[platform]": "IOS",
       "filter[status]": "ENABLED",
       "fields[devices]": "name,platform,udid,status,deviceClass,model",
       limit: "200",
     });
+    return devices.filter((device) => ["IPHONE", "IPAD", "IPOD"].includes(device.attributes?.deviceClass));
   }
 
   async findBundleId(identifier) {
