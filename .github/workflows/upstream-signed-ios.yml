@@ -321,10 +321,15 @@ jobs:
           DEFAULT_BUNDLE_ID=$(awk -F '=' '/^PRODUCT_BUNDLE_IDENTIFIER/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' source/Configuration/Base.xcconfig)
           BUNDLE_ID="${BUNDLE_ID_OVERRIDE:-${DEFAULT_BUNDLE_ID}}"
 
-          IDENTITY_SHA=$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk 'NR == 1 { print $2 }')
+          IDENTITY_SHA=$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk 'NR == 1 { print $2 }' | tr '[:lower:]' '[:upper:]')
           CERTIFICATE_PEM="${RUNNER_TEMP}/signing-certificate.pem"
-          if [ -z "${IDENTITY_SHA}" ] || ! security find-certificate -Z "${IDENTITY_SHA}" -p "${KEYCHAIN_PATH}" > "${CERTIFICATE_PEM}"; then
+          if [ -z "${IDENTITY_SHA}" ] || ! openssl pkcs12 -in "${CERT_PATH}" -clcerts -nokeys -passin env:CERT_PASSWORD -out "${CERTIFICATE_PEM}"; then
             echo "Unable to locate the imported signing certificate."
+            exit 1
+          fi
+          CERTIFICATE_SHA=$(openssl x509 -in "${CERTIFICATE_PEM}" -noout -fingerprint -sha1 | sed 's/.*=//' | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          if [ -z "${CERTIFICATE_SHA}" ] || [ "${CERTIFICATE_SHA}" != "${IDENTITY_SHA}" ]; then
+            echo "The imported signing identity does not match the certificate in the P12."
             exit 1
           fi
           CERTIFICATE_SERIAL=$(openssl x509 -in "${CERTIFICATE_PEM}" -noout -serial | sed 's/^serial=//')
