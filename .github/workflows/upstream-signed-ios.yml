@@ -323,7 +323,7 @@ jobs:
 
           IDENTITY_SHA=$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk 'NR == 1 { print $2 }' | tr '[:lower:]' '[:upper:]')
           CERTIFICATE_PEM="${RUNNER_TEMP}/signing-certificate.pem"
-          if [ -z "${IDENTITY_SHA}" ] || ! openssl pkcs12 -in "${CERT_PATH}" -clcerts -nokeys -passin env:CERT_PASSWORD -out "${CERTIFICATE_PEM}"; then
+          if [ -z "${IDENTITY_SHA}" ] || ! openssl pkcs12 -legacy -in "${CERT_PATH}" -clcerts -nokeys -passin env:CERT_PASSWORD -out "${CERTIFICATE_PEM}"; then
             echo "Unable to locate the imported signing certificate."
             exit 1
           fi
