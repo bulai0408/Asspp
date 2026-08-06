@@ -8,6 +8,7 @@ import {
   createRequest,
   getRequest,
   isExpired,
+  purgeExpiredRequests,
   storeCmsPayload,
   updateRequestStatus,
 } from "./store";
@@ -79,6 +80,9 @@ export default {
     }
 
     return new Response("Not found", { status: 404 });
+  },
+  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(purgeExpiredRequests(env.DB));
   },
 } satisfies ExportedHandler<Env>;
 

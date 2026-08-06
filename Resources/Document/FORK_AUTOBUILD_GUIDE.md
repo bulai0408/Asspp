@@ -71,6 +71,12 @@ _To get Base64 on macOS:_ `base64 -i certificate.p12 | pbcopy`
 | `IOS_EXPORT_METHOD` | `ad-hoc`         | Usually `ad-hoc`.                                                                                                         |
 | `IOS_OTA_BASE_URL`  | _(Optional)_     | If you use a custom domain for GitHub Pages, enter it here (e.g., `https://apps.example.com`). Otherwise, leave it empty. |
 
+### Optional: Self-Service Device Registration
+
+The repository also contains a password-gated Cloudflare Worker flow that obtains a device UDID through Apple's Profile Service protocol, registers it with App Store Connect, regenerates the Ad Hoc profile, and starts this workflow with only an opaque request ID.
+
+See [UDID Self-Service & OTA Operations](./UDID_ONBOARDING_OPERATIONS.md) for deployment, required secrets, user instructions, quota limits, and production verification.
+
 ## 4. Trigger the Build
 
 1.  Go to the **Actions** tab in your forked repository.

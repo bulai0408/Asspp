@@ -1,4 +1,5 @@
 export const REQUEST_TTL_SECONDS = 60 * 60;
+export const REQUEST_RETENTION_SECONDS = 24 * 60 * 60;
 
 export type OnboardingState =
   | "unlocked"
@@ -130,4 +131,28 @@ export async function updateRequestStatus(
     )
     .run();
   return result.meta.changes === 1;
+}
+
+export async function purgeExpiredRequests(
+  db: D1Database,
+  now = Math.floor(Date.now() / 1000),
+): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE onboarding_requests
+         SET state = CASE
+               WHEN state IN ('unlocked', 'device_received', 'building') THEN 'expired'
+               ELSE state
+             END,
+             cms_payload = NULL,
+             updated_at = ?
+         WHERE expires_at <= ?
+           AND (cms_payload IS NOT NULL OR state IN ('unlocked', 'device_received', 'building'))`,
+      )
+      .bind(now, now),
+    db
+      .prepare("DELETE FROM onboarding_requests WHERE expires_at <= ?")
+      .bind(now - REQUEST_RETENTION_SECONDS),
+  ]);
 }
